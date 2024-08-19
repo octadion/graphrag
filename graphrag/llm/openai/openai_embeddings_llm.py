@@ -29,10 +29,19 @@ class OpenAIEmbeddingsLLM(BaseLLM[EmbeddingInput, EmbeddingOutput]):
     async def _execute_llm(
         self, input: EmbeddingInput, **kwargs: Unpack[LLMInput]
     ) -> EmbeddingOutput | None:
+        extra_body = getattr(self.configuration, 'extra_body', None)
+        extra_body_from_kwargs = kwargs.pop('extra_body', None)
+        if extra_body_from_kwargs:
+            if extra_body:
+                extra_body.update(extra_body_from_kwargs)
+            else:
+                extra_body = extra_body_from_kwargs
         args = {
             "model": self.configuration.model,
             **(kwargs.get("model_parameters") or {}),
         }
+        if extra_body:
+            args['extra_body'] = extra_body
         embedding = await self.client.embeddings.create(
             input=input,
             **args,

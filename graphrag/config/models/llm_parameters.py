@@ -85,3 +85,7 @@ class LLMParameters(BaseModel):
         description="Whether to use concurrent requests for the LLM service.",
         default=defs.LLM_CONCURRENT_REQUESTS,
     )
+    extra_body: object = Field(
+        description="Extra body for metadata",
+        default=""
+    )

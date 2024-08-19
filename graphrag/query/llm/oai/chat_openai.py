@@ -43,6 +43,7 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
         request_timeout: float = 180.0,
         retry_error_types: tuple[type[BaseException]] = OPENAI_RETRY_ERROR_TYPES,  # type: ignore
         reporter: StatusReporter | None = None,
+        extra_body: dict | None = None
     ):
         OpenAILLMImpl.__init__(
             self=self,
@@ -58,7 +59,8 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
             reporter=reporter,
         )
         self.model = model
-        self.retry_error_types = retry_error_types
+        self.retry_error_types = retry_error_types,
+        self.extra_body = extra_body
 
     def generate(
         self,
@@ -173,10 +175,12 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
         model = self.model
         if not model:
             raise ValueError(_MODEL_REQUIRED_MSG)
+        extra_body = kwargs.pop('extra_body', self.extra_body)
         response = await self.async_client.chat.completions.create(  # type: ignore
             model=model,
             messages=messages,  # type: ignore
             stream=streaming,
+            extra_body=extra_body,
             **kwargs,
         )
         if streaming:

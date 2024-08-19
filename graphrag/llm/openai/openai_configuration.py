@@ -59,7 +59,7 @@ class OpenAIConfiguration(Hashable, LLMConfig):
     _concurrent_requests: int | None
     _encoding_model: str | None
     _sleep_on_rate_limit_recommendation: bool | None
-
+    _extra_body: dict | None
     def __init__(
         self,
         config: dict,
@@ -126,6 +126,7 @@ class OpenAIConfiguration(Hashable, LLMConfig):
         self._sleep_on_rate_limit_recommendation = lookup_bool(
             "sleep_on_rate_limit_recommendation"
         )
+        self._extra_body = lookup_dict("extra_body")
         self._raw_config = config
 
     @property
@@ -264,7 +265,11 @@ class OpenAIConfiguration(Hashable, LLMConfig):
     def raw_config(self) -> dict:
         """Raw config method definition."""
         return self._raw_config
-
+    @property
+    def extra_body(self) -> dict | None:
+        """Extra body property definition."""
+        return self._extra_body
+    
     def lookup(self, name: str, default_value: Any = None) -> Any:
         """Lookup method definition."""
         return self._raw_config.get(name, default_value)
@@ -285,4 +290,16 @@ class OpenAIConfiguration(Hashable, LLMConfig):
 
     def __hash__(self) -> int:
         """Hash method definition."""
-        return hash(tuple(sorted(self._raw_config.items())))
+        try:
+            config_items = tuple(sorted(self._raw_config.items()))
+
+            extra_body_json = json.dumps(self._extra_body, sort_keys=True) if self._extra_body else ''
+
+            return hash((config_items, extra_body_json))
+
+        except TypeError:
+
+            config_items = tuple(sorted((k, str(v)) for k, v in self._raw_config.items() if isinstance(k, Hashable)))
+            extra_body_json = json.dumps(self._extra_body, sort_keys=True) if self._extra_body else ''
+
+            return hash((config_items, extra_body_json))

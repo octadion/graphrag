@@ -83,6 +83,7 @@ def create_graphrag_config(
             llm_type = LLMType(llm_type) if llm_type else base.type
             api_key = reader.str(Fragment.api_key) or base.api_key
             api_base = reader.str(Fragment.api_base) or base.api_base
+            extra_body = reader.str(Fragment.extra_body) or base.extra_body
             cognitive_services_endpoint = (
                 reader.str(Fragment.cognitive_services_endpoint)
                 or base.cognitive_services_endpoint
@@ -107,6 +108,7 @@ def create_graphrag_config(
                 api_key=api_key,
                 type=llm_type,
                 api_base=api_base,
+                extra_body=extra_body,
                 api_version=reader.str(Fragment.api_version) or base.api_version,
                 organization=reader.str("organization") or base.organization,
                 proxy=reader.str("proxy") or base.proxy,
@@ -140,7 +142,7 @@ def create_graphrag_config(
             api_type = reader.str(Fragment.type) or defs.EMBEDDING_TYPE
             api_type = LLMType(api_type) if api_type else defs.LLM_TYPE
             api_key = reader.str(Fragment.api_key) or base.api_key
-
+            extra_body = reader.str(Fragment.extra_body) or base.extra_body
             # In a unique events where:
             # - same api_bases for LLM and embeddings (both Azure)
             # - different api_bases for LLM and embeddings (both Azure)
@@ -180,6 +182,7 @@ def create_graphrag_config(
                 api_key=api_key,
                 type=api_type,
                 api_base=api_base,
+                extra_body=extra_body,
                 api_version=api_version,
                 organization=api_organization,
                 proxy=api_proxy,
@@ -225,12 +228,14 @@ def create_graphrag_config(
         fallback_oai_base = reader.str(Fragment.api_base) or fallback_oai_base
         fallback_oai_version = reader.str(Fragment.api_version) or fallback_oai_version
         fallback_oai_proxy = reader.str(Fragment.api_proxy)
+        fallback_oai_extrabody = reader.str(Fragment.extra_body)
 
         with reader.envvar_prefix(Section.llm):
             with reader.use(values.get("llm")):
                 llm_type = reader.str(Fragment.type)
                 llm_type = LLMType(llm_type) if llm_type else defs.LLM_TYPE
                 api_key = reader.str(Fragment.api_key) or fallback_oai_key
+                extra_body = reader.str(Fragment.extra_body) or fallback_oai_extrabody
                 api_organization = (
                     reader.str(Fragment.api_organization) or fallback_oai_org
                 )
@@ -258,6 +263,7 @@ def create_graphrag_config(
                     api_key=api_key,
                     api_base=api_base,
                     api_version=api_version,
+                    extra_body=extra_body,
                     organization=api_organization,
                     proxy=api_proxy,
                     type=llm_type,
@@ -608,6 +614,7 @@ class Fragment(str, Enum):
     thread_stagger = "THREAD_STAGGER"
     tpm = "TOKENS_PER_MINUTE"
     type = "TYPE"
+    extra_body = "EXTRA_BODY"
 
 
 class Section(str, Enum):

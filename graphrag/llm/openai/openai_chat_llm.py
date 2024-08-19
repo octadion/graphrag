@@ -45,6 +45,15 @@ class OpenAIChatLLM(BaseLLM[CompletionInput, CompletionOutput]):
         args = get_completion_llm_args(
             kwargs.get("model_parameters"), self.configuration
         )
+        extra_body = getattr(self.configuration, 'extra_body', None)
+        if extra_body:
+            args['extra_body'] = extra_body
+
+        extra_body_from_kwargs = kwargs.pop('extra_body', None)
+        if extra_body_from_kwargs:
+            print(f"Extra body extracted from kwargs: {extra_body_from_kwargs}")
+            args['extra_body'] = extra_body_from_kwargs
+        
         history = kwargs.get("history") or []
         messages = [
             *history,

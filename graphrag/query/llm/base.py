@@ -4,10 +4,10 @@
 """Base classes for LLM and Embedding models."""
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator, Generator
 from typing import Any, Optional
 
 from openai.types import CompletionUsage
-
 
 class BaseLLMCallback:
     """Base class for LLM callbacks."""
@@ -37,6 +37,15 @@ class BaseLLM(ABC):
         """Generate a response."""
 
     @abstractmethod
+    def stream_generate(
+        self,
+        messages: str | list[Any],
+        callbacks: list[BaseLLMCallback] | None = None,
+        **kwargs: Any,
+    ) -> Generator[str, None, None]:
+        """Generate a response with streaming."""
+
+    @abstractmethod
     async def agenerate(
         self,
         messages: str | list[Any],
@@ -45,6 +54,16 @@ class BaseLLM(ABC):
         **kwargs: Any,
     ) -> str:
         """Generate a response asynchronously."""
+
+    @abstractmethod
+    async def astream_generate(
+        self,
+        messages: str | list[Any],
+        callbacks: list[BaseLLMCallback] | None = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        """Generate a response asynchronously with streaming."""
+        ...
 
 
 class BaseTextEmbedding(ABC):

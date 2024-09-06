@@ -58,6 +58,7 @@ class LocalSearch(BaseSearch):
         self,
         query: str,
         conversation_history: ConversationHistory | None = None,
+        system_prompt: str | None = None,
         **kwargs,
     ) -> SearchResult:
         """Build local search context that fits a single context window and generate answer for the user query."""
@@ -72,7 +73,8 @@ class LocalSearch(BaseSearch):
         )
         log.info("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
         try:
-            search_prompt = self.system_prompt.format(
+            final_prompt = system_prompt or self.system_prompt
+            search_prompt = final_prompt.format(
                 context_data=context_text, response_type=self.response_type
             )
             search_messages = [

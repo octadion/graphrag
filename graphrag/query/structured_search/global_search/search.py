@@ -136,6 +136,8 @@ class GlobalSearch(BaseSearch):
         self,
         query: str,
         conversation_history: ConversationHistory | None = None,
+        map_system_prompt: str | None = None,
+        reduce_system_prompt: str | None = None,
         **kwargs: Any,
     ) -> GlobalSearchResult:
         """
@@ -157,7 +159,7 @@ class GlobalSearch(BaseSearch):
                 callback.on_map_response_start(context_chunks)  # type: ignore
         map_responses = await asyncio.gather(*[
             self._map_response_single_batch(
-                context_data=data, query=query, **self.map_llm_params
+                context_data=data, query=query, map_system_prompt=map_system_prompt, **self.map_llm_params
             )
             for data in context_chunks
         ])
@@ -171,7 +173,8 @@ class GlobalSearch(BaseSearch):
         reduce_response = await self._reduce_response(
             map_responses=map_responses,
             query=query,
-            **self.reduce_llm_params,
+            reduce_system_prompt=reduce_system_prompt
+            **self.reduce_llm_params
         )
 
         return GlobalSearchResult(
@@ -199,13 +202,15 @@ class GlobalSearch(BaseSearch):
         self,
         context_data: str,
         query: str,
+        map_system_prompt: str,
         **llm_kwargs,
     ) -> SearchResult:
         """Generate answer for a single chunk of community reports."""
         start_time = time.time()
         search_prompt = ""
         try:
-            search_prompt = self.map_system_prompt.format(context_data=context_data)
+            final_prompt = map_system_prompt or self.map_system_prompt
+            search_prompt = final_prompt.format(context_data=context_data)
             search_messages = [
                 {"role": "system", "content": search_prompt},
                 {"role": "user", "content": query},
@@ -283,7 +288,8 @@ class GlobalSearch(BaseSearch):
         self,
         map_responses: list[SearchResult],
         query: str,
-        **llm_kwargs,
+        reduce_system_prompt: str,
+        **llm_kwargs
     ) -> SearchResult:
         """Combine all intermediate responses from single batches into a final answer to the user query."""
         text_data = ""
@@ -354,8 +360,8 @@ class GlobalSearch(BaseSearch):
                 data.append(formatted_response_text)
                 total_tokens += num_tokens(formatted_response_text, self.token_encoder)
             text_data = "\n\n".join(data)
-
-            search_prompt = self.reduce_system_prompt.format(
+            final_prompt = reduce_system_prompt or self.reduce_system_prompt
+            search_prompt = final_prompt.format(
                 report_data=text_data, response_type=self.response_type
             )
             if self.allow_general_knowledge:

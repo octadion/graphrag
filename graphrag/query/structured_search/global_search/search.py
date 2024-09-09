@@ -173,7 +173,7 @@ class GlobalSearch(BaseSearch):
         reduce_response = await self._reduce_response(
             map_responses=map_responses,
             query=query,
-            reduce_system_prompt=reduce_system_prompt
+            reduce_system_prompt=reduce_system_prompt,
             **self.reduce_llm_params
         )
 

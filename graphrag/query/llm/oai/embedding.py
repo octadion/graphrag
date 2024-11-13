@@ -26,8 +26,47 @@ from graphrag.query.llm.oai.typing import (
 )
 from graphrag.query.llm.text_utils import chunk_text
 from graphrag.query.progress import StatusReporter
+from transformers import AutoTokenizer
+from typing import Dict
+from langfuse import Langfuse
+from langfuse.decorators import observe, langfuse_context
+import os
+import ollama, tiktoken
 
+langfuse = Langfuse(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST")
+    )
 
+MODEL_URI_MAPPING: Dict[str, str] = {
+    "nomic-embed-text": "nomic-ai/nomic-embed-text-v1",
+    "bert-small": "prajjwal1/bert-small",
+    "all-MiniLM-L6": "sentence-transformers/all-MiniLM-L6-v2",
+    "e5-small": "intfloat/e5-small",
+    "bge-small-en": "BAAI/bge-small-en",
+    "gte-tiny": "thenlper/gte-tiny",
+}
+
+def get_model_uri(model_name: str) -> str:
+    return MODEL_URI_MAPPING.get(model_name, model_name)
+
+def count_tokens(provider: str, model_name: str, content: str) -> int:
+    try:
+        if provider == "openai":
+            encoding = tiktoken.encoding_for_model(model_name)
+            total_tokens = len(encoding.encode(content))
+        elif provider == "ollama":
+            model_uri = get_model_uri(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_uri)
+            tokens = tokenizer(content)
+            total_tokens = len(tokens['input_ids'])
+        else:
+            raise ValueError('Unsupported provider.')
+        return total_tokens
+    except Exception as e:
+        raise Exception(f"Error counting tokens: {str(e)}")
+    
 class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
     """Wrapper for OpenAI Embedding models."""
 
@@ -47,6 +86,8 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
         request_timeout: float = 180.0,
         retry_error_types: tuple[type[BaseException]] = OPENAI_RETRY_ERROR_TYPES,  # type: ignore
         reporter: StatusReporter | None = None,
+        provider: str = "openai",
+        extra_body: dict | None = None
     ):
         OpenAILLMImpl.__init__(
             self=self,
@@ -67,6 +108,9 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
         self.max_tokens = max_tokens
         self.token_encoder = tiktoken.get_encoding(self.encoding_name)
         self.retry_error_types = retry_error_types
+        self.api_base = api_base
+        self.provider = provider
+        self.extra_body = extra_body
 
     def embed(self, text: str, **kwargs: Any) -> list[float]:
         """
@@ -93,9 +137,17 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
                 )
 
                 continue
-        chunk_embeddings = np.average(chunk_embeddings, axis=0, weights=chunk_lens)
-        chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
-        return chunk_embeddings.tolist()
+        
+        if self.provider == "openai":
+            chunk_embeddings = np.average(chunk_embeddings, axis=0, weights=chunk_lens)
+            chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
+            return chunk_embeddings.tolist()
+
+        elif self.provider == "ollama":
+            chunk_embeddings = np.array([chunk['embedding'] for chunk in chunk_embeddings])
+            chunk_embeddings = np.average(chunk_embeddings, axis=0, weights=chunk_lens)
+            chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
+            return chunk_embeddings.tolist()
 
     async def aembed(self, text: str, **kwargs: Any) -> list[float]:
         """
@@ -118,6 +170,7 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
         chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
         return chunk_embeddings.tolist()
 
+    @observe(as_type='generation')
     def _embed_with_retry(
         self, text: str | tuple, **kwargs: Any
     ) -> tuple[list[float], int]:
@@ -130,16 +183,49 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
             )
             for attempt in retryer:
                 with attempt:
-                    embedding = (
-                        self.sync_client.embeddings.create(  # type: ignore
-                            input=text,
-                            model=self.model,
-                            **kwargs,  # type: ignore
-                        )
-                        .data[0]
-                        .embedding
-                        or []
+                    extra_body = kwargs.pop('extra_body', self.extra_body)
+                    trace_user_id = extra_body.get('metadata', {}).get('trace_user_id') if extra_body else None
+                    if trace_user_id:
+                        langfuse_context.update_current_trace(user_id=trace_user_id)
+                    kwargs_clone = kwargs.copy()
+                    langfuse_context.update_current_observation(
+                        input=text,
+                        model=self.model,
+                        metadata=kwargs_clone
                     )
+                    if self.provider == "openai":
+                        token_count = count_tokens(self.provider, self.model, text)
+                        embedding = (
+                            self.sync_client.embeddings.create(
+                                input=text,
+                                model=self.model,
+                                **kwargs,
+                            ).data[0].embedding or []
+                        )
+                        langfuse_context.update_current_observation(
+                        usage={
+                                "input": token_count,
+                                "output": 0,
+                                "unit": "TOKENS",
+                            }
+                        )
+                    elif self.provider == "ollama":
+                        token_count = count_tokens(self.provider, self.model, text)
+                        client = ollama.Client(host=self.api_base)
+                        embedding = (
+                            client.embeddings(
+                                model=self.model,
+                                prompt=text) or []
+                        )
+                        langfuse_context.update_current_observation(
+                        usage={
+                            "input": token_count,
+                            "output": 0,
+                            "unit": "TOKENS",
+                        }
+                    )
+                    else:
+                        raise ValueError("Unsupported embedding provider")
                     return (embedding, len(text))
         except RetryError as e:
             self._reporter.error(
@@ -163,13 +249,23 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
             )
             async for attempt in retryer:
                 with attempt:
-                    embedding = (
-                        await self.async_client.embeddings.create(  # type: ignore
-                            input=text,
-                            model=self.model,
-                            **kwargs,  # type: ignore
+                    if self.provider == "openai":
+                        embedding = (
+                            await self.async_client.embeddings.create(  # type: ignore
+                                input=text,
+                                model=self.model,
+                                **kwargs,  # type: ignore
+                            )
+                        ).data[0].embedding or []
+                    elif self.provider == "ollama":
+                        client = ollama.Client(host=self.api_base)
+                        embedding = (
+                            client.embeddings(
+                                model=self.model,
+                                prompt=text) or []
                         )
-                    ).data[0].embedding or []
+                    else:
+                        raise ValueError("Unsupported embedding provider")
                     return (embedding, len(text))
         except RetryError as e:
             self._reporter.error(

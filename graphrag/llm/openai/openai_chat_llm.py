@@ -28,6 +28,15 @@ log = logging.getLogger(__name__)
 _MAX_GENERATION_RETRIES = 3
 FAILED_TO_CREATE_JSON_ERROR = "Failed to generate valid JSON output"
 
+from langfuse import Langfuse
+from langfuse.decorators import observe, langfuse_context
+import os
+
+langfuse = Langfuse(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST")
+    )
 
 class OpenAIChatLLM(BaseLLM[CompletionInput, CompletionOutput]):
     """A Chat-based LLM."""
@@ -39,6 +48,7 @@ class OpenAIChatLLM(BaseLLM[CompletionInput, CompletionOutput]):
         self.client = client
         self.configuration = configuration
 
+    @observe(as_type='generation')
     async def _execute_llm(
         self, input: CompletionInput, **kwargs: Unpack[LLMInput]
     ) -> CompletionOutput | None:
@@ -46,13 +56,21 @@ class OpenAIChatLLM(BaseLLM[CompletionInput, CompletionOutput]):
             kwargs.get("model_parameters"), self.configuration
         )
         extra_body = getattr(self.configuration, 'extra_body', None)
-        if extra_body:
-            args['extra_body'] = extra_body
 
         extra_body_from_kwargs = kwargs.pop('extra_body', None)
         if extra_body_from_kwargs:
             print(f"Extra body extracted from kwargs: {extra_body_from_kwargs}")
-            args['extra_body'] = extra_body_from_kwargs
+            extra_body = extra_body_from_kwargs if not extra_body else {**extra_body, **extra_body_from_kwargs}
+        if extra_body and 'metadata' in extra_body:
+            trace_user_id = extra_body['metadata'].get('trace_user_id')
+            langfuse_context.update_current_trace(user_id=trace_user_id)
+        
+        kwargs_clone = kwargs.copy()
+        langfuse_context.update_current_observation(
+            input=input,
+            model=self.configuration.model,
+            metadata=kwargs_clone
+        )
         
         history = kwargs.get("history") or []
         messages = [
@@ -62,6 +80,15 @@ class OpenAIChatLLM(BaseLLM[CompletionInput, CompletionOutput]):
         completion = await self.client.chat.completions.create(
             messages=messages, **args
         )
+
+        langfuse_context.update_current_observation(
+            usage={
+                "input": completion.usage.prompt_tokens,
+                "output": completion.usage.completion_tokens,
+                "unit": "TOKENS",
+            }
+        )
+
         return completion.choices[0].message.content
 
     async def _invoke_json(

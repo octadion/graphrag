@@ -22,8 +22,17 @@ from graphrag.query.llm.oai.typing import (
     OpenaiApiType,
 )
 from graphrag.query.progress import StatusReporter
+from langfuse import Langfuse
+from langfuse.decorators import observe, langfuse_context
+import os
 
 _MODEL_REQUIRED_MSG = "model is required"
+
+langfuse = Langfuse(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST")
+    )
 
 
 class ChatOpenAI(BaseLLM, OpenAILLMImpl):
@@ -125,7 +134,7 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
             return
         else:
             return
-
+    @observe()
     async def agenerate(
         self,
         messages: str | list[Any],
@@ -135,6 +144,10 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
     ) -> str:
         """Generate text asynchronously."""
         try:
+            extra_body = kwargs.pop('extra_body', self.extra_body)
+            if extra_body and 'metadata' in extra_body:
+                trace_id = extra_body['metadata'].get('trace_id')
+
             retryer = AsyncRetrying(
                 stop=stop_after_attempt(self.max_retries),
                 wait=wait_exponential_jitter(max=10),
@@ -147,6 +160,7 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
                         messages=messages,
                         streaming=streaming,
                         callbacks=callbacks,
+                        langfuse_observation_id=trace_id,
                         **kwargs,
                     )
         except RetryError as e:
@@ -257,6 +271,7 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
                 for callback in callbacks:
                     callback.on_llm_new_token(delta)
 
+    @observe(as_type="generation")
     async def _agenerate(
         self,
         messages: str | list[Any],
@@ -265,16 +280,37 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
         **kwargs: Any,
     ) -> str:
         model = self.model
+        streaming = False
         if not model:
             raise ValueError(_MODEL_REQUIRED_MSG)
+
         extra_body = kwargs.pop('extra_body', self.extra_body)
-        response = await self.async_client.chat.completions.create(  # type: ignore
+        if extra_body and 'metadata' in extra_body:
+            trace_user_id = extra_body['metadata'].get('trace_user_id')
+            langfuse_context.update_current_trace(user_id=trace_user_id)
+
+        kwargs_clone = kwargs.copy()
+        langfuse_context.update_current_observation(
+            input=messages,
             model=model,
-            messages=messages,  # type: ignore
+            metadata=kwargs_clone
+        )
+
+        response = await self.async_client.chat.completions.create(
+            model=model,
+            messages=messages,
             stream=streaming,
-            extra_body=extra_body,
             **kwargs,
         )
+
+        langfuse_context.update_current_observation(
+            usage={
+                "input": response.usage.prompt_tokens,
+                "output": response.usage.completion_tokens,
+                "unit": "TOKENS",
+            }
+        )
+
         if streaming:
             full_response = ""
             while True:

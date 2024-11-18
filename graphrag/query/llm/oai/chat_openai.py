@@ -24,7 +24,7 @@ from graphrag.query.llm.oai.typing import (
 from graphrag.query.progress import StatusReporter
 from langfuse import Langfuse
 from langfuse.decorators import observe, langfuse_context
-import os
+import os, tiktoken
 
 _MODEL_REQUIRED_MSG = "model is required"
 
@@ -336,7 +336,7 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
             return full_response
 
         return response.choices[0].message.content or ""  # type: ignore
-
+    @observe(as_type="generation")
     async def _astream_generate(
         self,
         messages: str | list[Any],
@@ -346,12 +346,27 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
         model = self.model
         if not model:
             raise ValueError(_MODEL_REQUIRED_MSG)
+        
+        extra_body = kwargs.pop('extra_body', self.extra_body)
+        if extra_body and 'metadata' in extra_body:
+            trace_user_id = extra_body['metadata'].get('trace_user_id')
+            langfuse_context.update_current_trace(user_id=trace_user_id)
+
+        kwargs_clone = kwargs.copy()
+        langfuse_context.update_current_observation(
+            input=messages,
+            model=model,
+            metadata=kwargs_clone
+        )
+        message_str = " ".join([msg['content'] for msg in messages])
+        encoder = tiktoken.encoding_for_model("gpt-4o-mini")
         response = await self.async_client.chat.completions.create(  # type: ignore
             model=model,
             messages=messages,  # type: ignore
             stream=True,
             **kwargs,
         )
+        response_text = ""
         async for chunk in response:
             if not chunk or not chunk.choices:
                 continue
@@ -361,7 +376,17 @@ class ChatOpenAI(BaseLLM, OpenAILLMImpl):
                 if chunk.choices[0].delta and chunk.choices[0].delta.content
                 else ""
             )  # type: ignore
+            response_text += delta
 
+            output_tokens = len(encoder.encode(response_text))
+
+            langfuse_context.update_current_observation(
+                usage={
+                    "input": len(encoder.encode(message_str)),
+                    "output": output_tokens,
+                    "unit": "TOKENS",
+                }
+            )
             yield delta
 
             if callbacks:
